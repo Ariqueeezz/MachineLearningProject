@@ -1,5 +1,5 @@
 # Ketentuan Proyek
-- Buat model Macihne Learning dengan Algoritma KNN, Naive Bayes, Decision Tree (C.45)
+- Buat model Machine Learning dengan Algoritma KNN, Naive Bayes, Decision Tree (C.45)
 - Dataset harus 100rb baris/instances dan sudah pernah dipakai pada artikel orang lain
 - Sertakan Evaluasi Model dengan Akurasi > 0,95, Precision, Recall, F1-Score, ROC dan AUC
 
