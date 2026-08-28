@@ -1,0 +1,359 @@
+{
+  "name": "RPHUAxN8N",
+  "nodes": [
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Webhook').item.json.body.issue.fields.customfield_10043.split('/d/')[1].split('/')[0]}}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $json.sheets[0].properties.title }}",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -112,
+        -128
+      ],
+      "id": "00c01071-4dfe-48d6-9ff3-3d369778725d",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KPUdfzY6nbWLNZ1l",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rphua-trigger",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -416,
+        -128
+      ],
+      "id": "d4ae9e57-8228-467b-bd4c-430e12910fe0",
+      "name": "Webhook",
+      "webhookId": "6a0fa630-9427-4ff2-9a96-3a85250e6191"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Get row(s) in sheet').all();\nconst webhookData = $('Webhook').first().json;\nconst jiraData = webhookData.body ? webhookData.body.issue : webhookData.issue;\nconst epicName = $('Webhook').first().json.body.issue.fields.parent.fields.summary;\nconst attachments = jiraData.fields.attachment || [];\n\n// ============================================================\n// SHEET PROFILES\n// Untuk tambah format baru: cukup tambah satu objek di sini\n//\n// signatureSource : \"keys\"   = cocokkan dari nama kolom n8n\n//                  \"values\"  = cocokkan dari nilai baris-baris awal\n// needsRemap      : true     = n8n baca header palsu (col_1, col_2, JMO, SMILE)\n//                              → perlu remap ke nama kolom asli\n//                  false     = n8n sudah baca header dengan benar\n//                              → tidak perlu remap\n// dataStartRow    : index baris n8n yang mulai dianggap sebagai data (0-based)\n//                  0  = semua baris dari n8n adalah data\n//                  2  = skip 2 baris pertama (baris label grup + baris header)\n// noColumn        : nama kolom yang berisi nomor urut untuk filter baris valid\n//                  null = tidak ada, semua baris non-kosong valid\n// blocks          : blok kolom yang berulang dalam satu baris\n//                  suffix '' = blok pertama, '_2' = blok kedua, dst.\n// ============================================================\nconst SHEET_PROFILES = [\n  {\n    name            : \"Antrian Online\",\n    signature       : [\"kelas uji\", \"butir uji\", \"prosedur pengujian\"],\n    signatureSource : \"keys\",\n    needsRemap      : false,\n    dataStartRow    : 0,\n    noColumn        : null,\n    blocks          : [{ suffix: \"\", label: \"default\" }],\n    map: {\n      kelasUji : [\"Kelas Uji\", \"KELAS UJI\", \"Kelas\"],\n      butirUji : [\"Butir Uji\", \"BUTIR UJI\", \"Butir\"],\n      tanggal  : [\"Tanggal Pengujian\", \"Tgl Pengujian\", \"Tanggal\", \"Jadwal\"],\n      masukan  : [\"Data\", \"Masukan\", \"Input\", \"Data Masukan\"],\n      keluaran : [\"Keluaran yg diharapkan\", \"Keluaran yang Diharapkan\", \"Hasil yang diharapkan\", \"Keluaran\", \"Output\"],\n      prosedur : [\"Prosedur Pengujian\", \"Prosedur\", \"Langkah\"],\n      segmen   : []\n    }\n  },\n  {\n    name            : \"JMO\",\n    signature       : [\"jenis\", \"skenario\", \"test steps\", \"expected result\"],\n    signatureSource : \"values\",\n    needsRemap      : true,\n    dataStartRow    : 1,\n    noColumn        : \"NO\",\n    blocks          : [\n      { suffix: \"\",   label: \"JMO\"   },\n      { suffix: \"_2\", label: \"SMILE\" }\n    ],\n    map: {\n      kelasUji : [\"SKENARIO\", \"Skenario\"],\n      butirUji : [\"SKENARIO\", \"Skenario\"],\n      tanggal  : [\"Tanggal Pengujian\", \"Tgl Pengujian\", \"Tanggal\", \"Jadwal\"],\n      masukan  : [\"\"],\n      keluaran : [\"EXPECTED RESULT\", \"Expected Result\"],\n      prosedur : [\"TEST STEPS\", \"Test Steps\"],\n      preCondition : [\"PRE-CONDITION\", \"Pre-Condition\"],\n      segmen   : [\"SEGMEN\", \"Segmen\"]\n    }\n  }\n];\n\n// ============================================================\n// STEP 1: Deteksi profil\n// ============================================================\nfunction detectProfile(rows) {\n  for (const profile of SHEET_PROFILES) {\n    if (profile.signatureSource === \"keys\") {\n      // Cocokkan dari nama kolom (key) n8n di baris pertama\n      const keys = Object.keys(rows[0].json).map(k => k.toLowerCase().trim());\n      const matchCount = profile.signature.filter(sig => keys.includes(sig)).length;\n      if (matchCount >= Math.ceil(profile.signature.length * 0.75)) {\n        return profile;\n      }\n    } else {\n      // Cocokkan dari nilai baris-baris awal (max 5 baris)\n      const maxScan = Math.min(5, rows.length);\n      for (let i = 0; i < maxScan; i++) {\n        const vals = Object.values(rows[i].json)\n          .map(v => String(v || \"\").toLowerCase().trim())\n          .filter(v => v !== \"\");\n        const matchCount = profile.signature.filter(sig => vals.includes(sig)).length;\n        if (matchCount >= Math.ceil(profile.signature.length * 0.75)) {\n          return profile;\n        }\n      }\n    }\n  }\n  // Fallback ke profil pertama\n  return SHEET_PROFILES[0];\n}\n\nconst profile = detectProfile(rows);\n\n// ============================================================\n// STEP 2: Bangun realHeaderMap (hanya kalau needsRemap = true)\n// ============================================================\nlet realHeaderMap = {};\n\nif (profile.needsRemap) {\n  // Cari baris yang isinya cocok dengan signature profil ini\n  const maxScan = Math.min(5, rows.length);\n  for (let i = 0; i < maxScan; i++) {\n    const vals = Object.values(rows[i].json)\n      .map(v => String(v || \"\").toLowerCase().trim());\n    const matchCount = profile.signature.filter(sig => vals.includes(sig)).length;\n    if (matchCount >= Math.ceil(profile.signature.length * 0.75)) {\n      const usedNames = {};\n      for (const [key, val] of Object.entries(rows[i].json)) {\n        if (!val || String(val).trim() === \"\") continue;\n        let realKey = String(val).trim();\n        if (usedNames[realKey]) {\n          usedNames[realKey]++;\n          realKey = `${realKey}_${usedNames[realKey]}`;\n        } else {\n          usedNames[realKey] = 1;\n        }\n        realHeaderMap[key] = realKey;\n      }\n      break;\n    }\n  }\n}\n\n// ============================================================\n// STEP 3: Remap key col_N → nama kolom asli\n// ============================================================\nfunction remapRow(rowJson) {\n  if (!profile.needsRemap || Object.keys(realHeaderMap).length === 0) return rowJson;\n  const remapped = {};\n  for (const [key, val] of Object.entries(rowJson)) {\n    const realKey = realHeaderMap[key] || key;\n    remapped[realKey] = val;\n  }\n  return remapped;\n}\n\n// ============================================================\n// STEP 4: Filter baris valid + terapkan remap\n// ============================================================\nfunction isDataRow(rowJson, rowIndex) {\n  // Buang baris sebelum dataStartRow\n  if (rowIndex < profile.dataStartRow) return false;\n\n  const vals = Object.values(rowJson).map(v => String(v || \"\").trim());\n  if (vals.every(v => v === \"\")) return false;\n\n  // Kalau profil punya noColumn, pastikan nilainya angka\n  if (profile.noColumn) {\n    const noKey = Object.keys(realHeaderMap).find(k => realHeaderMap[k] === profile.noColumn);\n    const noVal = rowJson[noKey] ?? rowJson[profile.noColumn];\n    if (noVal === undefined || noVal === null || noVal === \"\") return false;\n    return !isNaN(parseFloat(noVal));\n  }\n\n  return true;\n}\n\nconst validRows = rows\n  .filter((row, i) => isDataRow(row.json, i))\n  .map(row => ({ ...row, json: remapRow(row.json) }));\n\n// ============================================================\n// HELPER: getVal — cari nilai berdasarkan daftar alias\n// ============================================================\nfunction getVal(rowJson, aliases, fallback = \"-\") {\n  for (const alias of aliases) {\n    if (rowJson[alias] !== undefined && rowJson[alias] !== null && rowJson[alias] !== \"\") {\n      return rowJson[alias];\n    }\n  }\n  const rowKeysLower = Object.keys(rowJson).map(k => ({ original: k, lower: k.toLowerCase().trim() }));\n  for (const alias of aliases) {\n    const found = rowKeysLower.find(k => k.lower === alias.toLowerCase().trim());\n    if (found && rowJson[found.original] !== undefined && rowJson[found.original] !== \"\") {\n      return rowJson[found.original];\n    }\n  }\n  return fallback;\n}\n\n// ============================================================\n// HELPER: Ekstrak satu blok skenario (JMO atau SMILE)\n// ============================================================\nfunction extractSkenario(data, suffix) {\n  const map = profile.map;\n\n  // let butirAliases, prosedurAliases, keluaranAliases, preConditionAliases;\n  let butirAliases, prosedurAliases, keluaranAliases;\n\n  if (suffix === \"\") {\n    // Blok pertama: pakai nama asli\n    butirAliases        = map.butirUji;\n    prosedurAliases     = map.prosedur;\n    keluaranAliases     = map.keluaran;\n    // preConditionAliases = map.preCondition || []; // Ambil dari map baru\n  } else {\n    // Blok kedua (SMILE): HANYA cari nama+suffix, tidak fallback ke tanpa suffix\n    butirAliases        = map.butirUji.map(a => `${a}${suffix}`);\n    prosedurAliases     = map.prosedur.map(a => `${a}${suffix}`);\n    keluaranAliases     = map.keluaran.map(a => `${a}${suffix}`);\n    // preConditionAliases = (map.preCondition || []).map(a => `${a}${suffix}`);\n  }\n\n  const rawButir   = getVal(data, butirAliases, \"\");\n  const stepRaw    = getVal(data, prosedurAliases, \"\");\n  const keluaran   = getVal(data, keluaranAliases, \"\");\n  // const preCondRaw = getVal(data, preConditionAliases, \"\");\n\n  // GABUNGKAN Pre-Condition dan Test Steps di sini\n  let prosedurRaw = \"\";\n  // if (preCondRaw) prosedurRaw += \"[PRE-CONDITION]\\n\" + preCondRaw.trim() + \"\\n\\n\";\n  // if (stepRaw) prosedurRaw += \"[TEST STEPS]\\n\" + stepRaw.trim();\n  if (stepRaw) prosedurRaw += stepRaw.trim();\n\n  return { rawButir, prosedurRaw, keluaran };\n}\n\n// ============================================================\n// HELPER: Normalisasi awalan \"Pengujian\" / \"Pengujian pada\"\n// ============================================================\nfunction normalizeButir(str) {\n  if (!str || str === \"-\") return \"-\";\n  if (/^pengujian\\s+pada\\s+/i.test(str)) return str;\n  if (/^pengujian\\s+/i.test(str)) return str;\n  return `Pengujian pada ${str}`;\n}\n\n// ============================================================\n// MAIN LOGIC\n// ============================================================\nlet tabelIdentifikasiArr = [];\nlet tabelDeskripsiArr    = [];\nlet hasilPengujianArr    = [];\nlet currentKelasUji      = \"\";\nlet listMaterial         = [];\nlet targetTemplateId     = \"\";\nlet paCounter            = 0;\n\nvalidRows.forEach((row) => {\n  const data = row.json;\n  const map  = profile.map;\n\n  // Kolom shared\n  let rawKelas = getVal(data, map.kelasUji, \"\");\n  if (rawKelas.toString().trim() !== \"\") {\n    currentKelasUji = rawKelas.toString().trim();\n    if (!listMaterial.includes(currentKelasUji)) listMaterial.push(currentKelasUji);\n  }\n  const finalKelasUji = currentKelasUji;\n  const tanggal       = getVal(data, map.tanggal, \"-\");\n  const segmen        = getVal(data, map.segmen,  \"\");\n  const testData      = getVal(data, map.masukan, \"Data Peserta\");\n  const masukanParts  = [segmen, testData].filter(v => String(v).trim() !== \"\");\n  const masukan       = masukanParts.length > 0 ? masukanParts.join(\"\\n\") : \"-\";\n\n  // Ganti bagian entries dengan ini — identik dengan versi yang benar\n  const jmo   = extractSkenario(data, '');\n  const smile = extractSkenario(data, '_2');\n  \n  const hasJMO   = jmo.rawButir.trim()   !== \"\";\n  const hasSMILE = smile.rawButir.trim() !== \"\";\n  \n  const entries = [];\n  if (hasJMO)   entries.push(jmo);\n  if (hasSMILE) entries.push(smile);\n  if (!hasJMO && !hasSMILE) entries.push(jmo);\n\n  entries.forEach(entry => {\n    paCounter++;\n    const idPA = `PA_${paCounter}`;\n\n    const rawButir          = entry.rawButir || \"-\";\n    const prosedurPengujian = entry.prosedurRaw.toString().replace(/\\r\\n/g, '\\n').trim();\n    const keluaran          = entry.keluaran || \"-\";\n    const finalButir        = normalizeButir(rawButir.toString().trim());\n    const cleanButir        = finalButir.replace(/^pengujian\\s+(pada\\s+)?/i, \"\").trim();\n    const deskripsi         = cleanButir !== \"-\" ? `Menguji ${cleanButir}` : \"-\";\n\n    const fileBuktiList = attachments.filter(att => {\n      const filename    = att.filename.toUpperCase();\n      const isMimeImage = att.mimeType && att.mimeType.startsWith('image/');\n      const isNameMatch = filename.includes(idPA.toUpperCase() + \".\") || filename.includes(idPA.toUpperCase() + \"_\");\n      return isMimeImage && isNameMatch;\n    });\n    const urlJiraList = fileBuktiList.map(file => file.content);\n\n    tabelIdentifikasiArr.push({\n      \"Kelas Uji\"         : finalKelasUji,\n      \"Butir Uji\"         : finalButir,\n      \"Identifikasi PA\"   : idPA,\n      \"Tingkat Pengujian\" : \"Pengujian Sistem\",\n      \"Jenis Pengujian\"   : \"Black box\",\n      \"Jadwal\"            : tanggal\n    });\n\n    tabelDeskripsiArr.push({\n      \"Identifikasi\"             : idPA,\n      \"Deskripsi\"                : deskripsi,\n      \"Prosedur Pengujian\"       : prosedurPengujian,\n      \"Masukan\"                  : masukan,\n      \"Keluaran yang Diharapkan\" : keluaran,\n      \"Kriteria Evaluasi Hasil\"  : \"Sesuai\",\n      \"Hasil yang Didapat\"       : \"Berhasil dilakukan\",\n      \"Kesimpulan\"               : \"Diterima\"\n    });\n\n    hasilPengujianArr.push({\n      \"deskripsi\"    : deskripsi,\n      \"urlBuktiList\" : urlJiraList\n    });\n  });\n});\n\nlet materialPengujianTeks = \"\";\nlistMaterial.forEach((item, idx) => {\n  materialPengujianTeks += `${idx + 1}. ${item}\\n`;\n});\n\nif (epicName.includes(\"JMO\")) {\n  targetTemplateId = \"1QKHIfIq7CrxUXQcyi8DM4HeBoIPXcn3UGcmtpPMQL2I\";\n} else if (epicName.includes(\"Antrian Online Lapak Asik\")) {\n  targetTemplateId = \"1q6HK51D5j1_rDRKOFOKqRxS1nl9P0hMwKMR4sA6mU4s\";\n} else {\n  targetTemplateId = \"1q6HK51D5j1_rDRKOFOKqRxS1nl9P0hMwKMR4sA6mU4s\";\n}\n\nreturn [{\n  json: {\n    judul_rphua        : $('Webhook').first().json.body.issue.fields.summary,\n    judul_docs         : jiraData.fields.summary,\n    template_id        : targetTemplateId,\n    material_pengujian : materialPengujianTeks.trim(),\n    tabel_identifikasi : tabelIdentifikasiArr,\n    tabel_deskripsi    : tabelDeskripsiArr,\n    hasil_pengujian    : hasilPengujianArr\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        48,
+        -128
+      ],
+      "id": "781a4f74-d01d-45af-aea9-c9aa03909069",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $json.body.issue.fields.customfield_10043.split('/d/')[1].split('/')[0] }}?fields=sheets.properties.title",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -272,
+        -128
+      ],
+      "id": "5ba5b990-876d-4c84-be82-afd4404adede",
+      "name": "Get Sheet Metadata",
+      "alwaysOutputData": true,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "cJu1N8XX4PjZUmap",
+          "name": "Jira SW Cloud account"
+        },
+        "googleSheetsOAuth2Api": {
+          "id": "KPUdfzY6nbWLNZ1l",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "copy",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.template_id }}",
+          "mode": "id"
+        },
+        "name": "={{ $json.judul_docs }}",
+        "sameFolder": false,
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1dQHOlsB7Zv1zay0Avb0J3v4SxjeMf49G",
+          "mode": "list",
+          "cachedResultName": "n8n",
+          "cachedResultUrl": "https://drive.google.com/drive/folders/1dQHOlsB7Zv1zay0Avb0J3v4SxjeMf49G"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        224,
+        -128
+      ],
+      "id": "c1ba1a13-5c55-4dca-b322-91d295f3f737",
+      "name": "Copy Template RPHUA ",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "WIN6dMlCeN2mMSCV",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDocsOAuth2Api",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "docId",
+              "value": "={{ $('Copy Template RPHUA ').first().json.id }}"
+            },
+            {
+              "name": "payload",
+              "value": "={{ $('Code in JavaScript').first().json }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        400,
+        -128
+      ],
+      "id": "cb9777f0-c4b0-41e7-ba9e-a4d9250e356b",
+      "name": "Post Content",
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "LA59eRNvNkhs8kkw",
+          "name": "Google Docs account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://raihanariq395.atlassian.net/rest/api/3/issue/{{ $('Webhook').first().json.body.issue.key }}/remotelink",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        560,
+        -128
+      ],
+      "id": "10df7bf9-6319-462f-86b2-0f4ed691ed3c",
+      "name": "Get Remote Link JIRA",
+      "alwaysOutputData": true,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "cJu1N8XX4PjZUmap",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e47f0600-5472-48c5-be56-fd9cdaff7000",
+              "leftValue": "={{ $('Get Remote Link JIRA').item.json }}",
+              "rightValue": "={{ true }}",
+              "operator": {
+                "type": "object",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        736,
+        -128
+      ],
+      "id": "1d5849bf-65e1-4e4a-a1a2-eb29310226f5",
+      "name": "Duplicate Check"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://raihanariq395.atlassian.net/rest/api/3/issue/{{ $('Webhook').first().json.body.issue.key }}/remotelink",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"object\": {\n    \"url\": \"https://docs.google.com/document/d/{{ $('Copy Template RPHUA ').first().json.id }}/edit\",\n    \"title\": \"{{ $('Webhook').item.json.body.issue.fields.summary }}\"\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        912,
+        -128
+      ],
+      "id": "2df9faa7-58e0-482f-87f5-23e40e63ae8d",
+      "name": "Paste Link",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "cJu1N8XX4PjZUmap",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Sheet Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Copy Template RPHUA ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sheet Metadata": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Copy Template RPHUA ": {
+      "main": [
+        [
+          {
+            "node": "Post Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Content": {
+      "main": [
+        [
+          {
+            "node": "Get Remote Link JIRA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Remote Link JIRA": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Check": {
+      "main": [
+        [
+          {
+            "node": "Paste Link",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "d531d286-58ce-4772-b213-f2c2533c6ca9",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "baba157c30f778f5d99b1d033e75f3a459e2aa0b6b9d991ebc9fdb64f52a2636"
+  },
+  "id": "Zwx3WWQ1aVtYgZvt",
+  "tags": []
+}
